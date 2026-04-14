@@ -205,6 +205,83 @@ const checkIsFullScreen = () => {
   })
 }
 
+/**
+ * 💡 关键修复：解决知乎等站点在开启滤镜后，Modal 关闭但 body overflow: hidden 状态不恢复的问题
+ * 原理：当 body 的 overflow 变为 hidden 时，监控页面上的 Modal 元素。
+ * 如果 Modal 被移除但 overflow 仍然是 hidden，则手动恢复为 auto。
+ */
+const fixScrollIssue = () => {
+  const isZhihu = window.location.hostname.includes('zhihu.com')
+  if (!isZhihu) return
+
+  const checkAndRestoreScroll = () => {
+    const isDark = document.documentElement.classList.contains(CLASS_KEY)
+    if (!isDark) return
+
+    const body = document.body
+    const html = document.documentElement
+    if (!body || !html) return
+
+    // 检查是否有任何弹窗或大图查看器
+    // 扩大检测范围，知乎的评论图片预览器可能包含这些特征
+    const selectors = [
+      '.Image-viewer',
+      '.Modal-wrapper',
+      '.Lightbox',
+      '[role="dialog"]',
+      '[class*="Modal"]',
+      '[class*="viewer"]',
+      '.css-1738258',
+      '.css-1909605', // 知乎某些版本下的弹窗类名
+    ]
+    const hasModal = !!document.querySelector(selectors.join(', '))
+
+    if (!hasModal) {
+      // 检查 body 和 html 的计算样式，因为 overflow 可能来自 class 而非 inline style
+      const bodyStyle = window.getComputedStyle(body)
+      const htmlStyle = window.getComputedStyle(html)
+
+      if (bodyStyle.overflow === 'hidden' || htmlStyle.overflow === 'hidden') {
+        // 发现被锁死，尝试强力恢复
+        const restore = () => {
+          // 再次确认 Modal 确实不在了
+          if (!document.querySelector(selectors.join(', '))) {
+            body.style.setProperty('overflow', 'auto', 'important')
+            html.style.setProperty('overflow', 'auto', 'important')
+            // 某些知乎版本可能还在 body 上设置了 position: fixed 或 top
+            if (bodyStyle.position === 'fixed') {
+              body.style.setProperty('position', 'static', 'important')
+            }
+            window.dispatchEvent(new Event('resize'))
+          }
+        }
+
+        // 立即尝试一次，并在短时间后再确认一次（应对知乎脚本的异步操作）
+        restore()
+        setTimeout(restore, 500)
+      }
+    }
+  }
+
+  // 1. 使用 MutationObserver 监控 DOM 变化
+  const observer = new MutationObserver(checkAndRestoreScroll)
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['style', 'class'],
+    childList: true,
+    subtree: true, // 扩大到子树，确保能捕捉到深层的 Modal 移除
+  })
+
+  // 2. 补充：点击页面时也触发检查（关闭按钮通常在点击时生效）
+  window.addEventListener(
+    'click',
+    () => {
+      setTimeout(checkAndRestoreScroll, 100)
+    },
+    true,
+  )
+}
+
 function main() {
   chrome.runtime.sendMessage({ action: 'getGlobal' }, (response) => {
     if (response) {
@@ -257,6 +334,7 @@ function main() {
     }
   })
   checkIsFullScreen()
+  fixScrollIssue()
 }
 
 main()
