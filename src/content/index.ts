@@ -3,6 +3,53 @@ import './index.css'
 import { SESSION_KEY, CLASS_KEY, ADVANCE_KEY } from '@/constant'
 import { matchWildcardUrls } from '@/utils'
 
+// 💡 关键修复：在 document_start 时立即同步检查 sessionStorage，防止白屏闪烁
+;(function applyEarlyTheme() {
+  const isDark = sessionStorage.getItem(SESSION_KEY) === 'true'
+  if (isDark) {
+    const root = document.documentElement
+    root.classList.add(CLASS_KEY)
+
+    // 💡 强制禁用初始过渡，确保应用是瞬间的
+    const style = document.createElement('style')
+    style.id = 'dimmer-initial-style'
+    style.innerHTML = `
+      html, html * { 
+        transition: none !important; 
+      }
+    `
+    root.appendChild(style)
+
+    // 立即尝试从 sessionStorage 获取配置并应用初步滤镜
+    const configStr = sessionStorage.getItem(ADVANCE_KEY)
+    if (configStr) {
+      try {
+        const config = JSON.parse(configStr)
+        const filters = [
+          `brightness(${config.brightness * 10}%)`,
+          `contrast(${config.contrast / 10})`,
+          `grayscale(${config.grayscale * 10}%)`,
+          `sepia(${config.sepia * 10}%)`,
+          `invert(100)`,
+          `hue-rotate(180deg)`,
+        ].join(' ')
+        root.style.filter = filters
+      } catch (e) {
+        root.style.filter = 'invert(100) hue-rotate(180deg)'
+      }
+    } else {
+      root.style.filter = 'invert(100) hue-rotate(180deg)'
+    }
+
+    // 在下一帧移除强制禁用过渡的样式，以便后续手动切换时能正常过渡
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        style.remove()
+      }, 100)
+    })
+  }
+})()
+
 type Filter = Record<string, string>
 
 let htmlFilter: Filter = {}
@@ -87,6 +134,10 @@ const readableConfig = (data: Record<string, number>): Record<string, string> =>
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const { info, data = {} } = request
   if (info === 'changeMode' || info === 'toggleMode') {
+    const root = document.documentElement
+    // 💡 手动切换时添加过渡类，实现丝滑切换
+    root.classList.add('dimmerTransition')
+
     chrome.runtime.sendMessage({ action: 'getGlobal' }, (response) => {
       const { isDark, isGlobal } = response?.state || {}
       const [root] = document.getElementsByTagName('html')
@@ -126,7 +177,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       root.style.filter = `${objectToFilterString(htmlFilter)}`
     })
     if (info === 'toggleMode') {
-      chrome.runtime.sendMessage({ action: 'updatePopupConfig' });
+      chrome.runtime.sendMessage({ action: 'updatePopupConfig' })
     }
   }
   if (info === 'getMode') {
@@ -138,6 +189,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })
   }
   if (info === 'changeConfig') {
+    document.documentElement.classList.add('dimmerTransition')
     setFilter(data, false)
   }
 })
@@ -158,9 +210,16 @@ function main() {
     if (response) {
       const state = response.state
       const { isDark, isGlobal, config, excludeUrls } = state
-      const root = document.getElementsByTagName('html')[0]
+      const root = document.documentElement
       if (isGlobal) {
-        if (isDark && matchWildcardUrls(window.location.href, excludeUrls) === false) {
+        const isExcluded = matchWildcardUrls(window.location.href, excludeUrls)
+        const shouldBeDark = isDark && !isExcluded
+
+        // 💡 同步更新 sessionStorage，供下次刷新时 applyEarlyTheme 使用
+        sessionStorage.setItem(SESSION_KEY, shouldBeDark ? 'true' : 'false')
+        sessionStorage.setItem(ADVANCE_KEY, JSON.stringify(config))
+
+        if (shouldBeDark) {
           root.classList.add(CLASS_KEY)
           htmlFilter = {
             ...htmlFilter,

@@ -1,7 +1,7 @@
 {
   "name": "dimmer",
   "version": "2.2.0",
-  "author": "slc3a2@gmail.com",
+  "author": "liang7hi@gmail.com",
   "description": "",
   "type": "module",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "create-chrome-ext"
   ],
   "engines": {
-    "node": ">=14.18.0"
+    "node": ">=18.0.0"
   },
   "scripts": {
     "start": "vite",

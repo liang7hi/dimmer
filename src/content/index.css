@@ -1,16 +1,16 @@
-html.dimmerIsDark {
-  transition: filter 0.8s !important;
-}
 html.dimmerIsDark img,
 html.dimmerIsDark video {
   filter: invert(100) hue-rotate(180deg) !important;
-  transition: filter 0.8s !important;
 }
 html {
   background-color: transparent !important;
-  transition: filter 0.5s !important;
 }
 html img {
   filter: invert(0) hue-rotate(0) !important;
+}
+
+/* 💡 只有在手动切换时才添加过渡，避免初始加载闪烁 */
+html.dimmerTransition,
+html.dimmerTransition * {
   transition: filter 0.5s !important;
 }

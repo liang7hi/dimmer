@@ -28,7 +28,7 @@ export default defineManifest({
     {
       js: ['src/content/index.ts'],
       matches: ['<all_urls>'],
-      run_at: 'document_end',
+      run_at: 'document_start',
     },
   ],
   web_accessible_resources: [
