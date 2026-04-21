@@ -170,47 +170,55 @@ const Popup = () => {
 
   const changeModeHandle = (v: boolean) => {
     setIsDark(v)
-    if (globalState.isGlobal) {
-      chrome.tabs.query({}, (tabs) => {
-        for (let i = 0, len = tabs.length; i < len; i++) {
-          const tab = tabs[i]
-          const { url } = tab
-          if (url) {
-            if (matchWildcardUrls(url)) {
-              continue
+
+    //  先更新后台状态，然后再通知标签页，避免获取到旧状态
+    chrome.runtime.sendMessage(
+      {
+        action: 'setGlobal',
+        state: {
+          isDark: v,
+        },
+      },
+      () => {
+        if (globalState.isGlobal) {
+          chrome.tabs.query({}, (tabs) => {
+            for (let i = 0, len = tabs.length; i < len; i++) {
+              const tab = tabs[i]
+              const { url } = tab
+              if (url) {
+                if (matchWildcardUrls(url)) {
+                  continue
+                }
+              }
+              if (tab.id) {
+                let message = {
+                  info: 'changeMode',
+                  data: { isDark: v }, //  传递最新状态
+                }
+                chrome.tabs.sendMessage(tab.id, message, (res) => {})
+              }
             }
-          }
-          if (tab.id) {
-            let message = {
-              info: 'changeMode',
-            }
-            chrome.tabs.sendMessage(tab.id, message, (res) => {})
-            chrome.runtime.sendMessage({
-              action: 'setGlobal',
-              state: {
-                isDark: v,
-              },
-            })
-          }
+          })
+        } else {
+          chrome.tabs.query(
+            {
+              active: true,
+              currentWindow: true,
+            },
+            (tabs) => {
+              const [{ id }] = tabs
+              if (id) {
+                let message = {
+                  info: 'changeMode',
+                  data: { isDark: v }, //  传递最新状态
+                }
+                chrome.tabs.sendMessage(id, message, (res) => {})
+              }
+            },
+          )
         }
-      })
-    } else {
-      chrome.tabs.query(
-        {
-          active: true,
-          currentWindow: true,
-        },
-        (tabs) => {
-          const [{ id }] = tabs
-          if (id) {
-            let message = {
-              info: 'changeMode',
-            }
-            chrome.tabs.sendMessage(id, message, (res) => {})
-          }
-        },
-      )
-    }
+      },
+    )
   }
 
   const brightnessOnChange = (value: number) => {

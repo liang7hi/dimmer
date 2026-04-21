@@ -1,15 +1,15 @@
-html.dimmerIsDark img,
-html.dimmerIsDark video {
-  filter: invert(100) hue-rotate(180deg) !important;
-}
 html {
   background-color: transparent !important;
 }
-html img {
-  filter: invert(0) hue-rotate(0) !important;
+
+/*  核心修复：应用反向滤镜（invert 100），抵消全局的反转效果，使图片、视频和背景图恢复原始颜色 */
+html.dimmerIsDark img,
+html.dimmerIsDark video,
+html.dimmerIsDark .dimmerInvert {
+  filter: invert(100) hue-rotate(180deg) !important;
 }
 
-/* 💡 只有在手动切换时才添加过渡，避免初始加载闪烁 */
+/*  只有在手动切换时才添加过渡，避免初始加载闪烁 */
 html.dimmerTransition,
 html.dimmerTransition * {
   transition: filter 0.5s !important;

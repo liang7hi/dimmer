@@ -3,14 +3,14 @@ import './index.css'
 import { SESSION_KEY, CLASS_KEY, ADVANCE_KEY } from '@/constant'
 import { matchWildcardUrls } from '@/utils'
 
-// 💡 关键修复：在 document_start 时立即同步检查 sessionStorage，防止白屏闪烁
+//  关键修复：在 document_start 时立即同步检查 sessionStorage，防止白屏闪烁
 ;(function applyEarlyTheme() {
   const isDark = sessionStorage.getItem(SESSION_KEY) === 'true'
   if (isDark) {
     const root = document.documentElement
     root.classList.add(CLASS_KEY)
 
-    // 💡 强制禁用初始过渡，确保应用是瞬间的
+    //  强制禁用初始过渡，确保应用是瞬间的
     const style = document.createElement('style')
     style.id = 'dimmer-initial-style'
     style.innerHTML = `
@@ -54,6 +54,9 @@ type Filter = Record<string, string>
 
 let htmlFilter: Filter = {}
 
+//  使用 WeakSet 记录已检查过的元素，避免重复 getComputedStyle 影响性能
+const checkedElements = new WeakSet<Element>()
+
 const theme = {
   '1': {
     invert: '100',
@@ -87,7 +90,7 @@ const objectToFilterString = (obj: Filter) => {
 const setFilter = (data: Record<string, number>, passive: Boolean) => {
   if (Object.keys(data).length === 0) return
   const { brightness, contrast, grayscale, sepia } = data
-  const [root] = document.getElementsByTagName('html')
+  const root = document.documentElement
   if (root) {
     htmlFilter = {
       ...htmlFilter,
@@ -131,18 +134,74 @@ const readableConfig = (data: Record<string, number>): Record<string, string> =>
   return res
 }
 
+/**
+ *  关键修复：识别并反转背景图片颜色
+ * 优化：使用 WeakSet 缓存，并仅在必要时检查
+ */
+const identifyBgElements = (nodes: NodeList | HTMLCollection | Element[]) => {
+  const isDark = document.documentElement.classList.contains(CLASS_KEY)
+  if (!isDark) return
+
+  const checkElement = (el: Element) => {
+    if (
+      el.tagName === 'IMG' ||
+      el.tagName === 'VIDEO' ||
+      el.tagName === 'SCRIPT' ||
+      el.tagName === 'STYLE'
+    )
+      return
+
+    // 如果元素已经在 WeakSet 中且没有 class 变化（通过 MutationObserver 处理），则跳过
+    if (checkedElements.has(el) && el.classList.contains('dimmerInvert')) return
+
+    const style = window.getComputedStyle(el)
+    const bgImage = style.backgroundImage
+
+    if (bgImage && bgImage !== 'none' && bgImage.includes('url(')) {
+      if (!el.classList.contains('dimmerInvert')) {
+        el.classList.add('dimmerInvert')
+      }
+    } else {
+      if (el.classList.contains('dimmerInvert')) {
+        el.classList.remove('dimmerInvert')
+      }
+    }
+    checkedElements.add(el)
+  }
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    if (node instanceof Element) {
+      checkElement(node)
+      // 性能优化：不使用 querySelectorAll('*')，仅扫描具有 style 或特定属性的子元素
+      const children = node.getElementsByTagName('*')
+      for (let j = 0; j < children.length; j++) {
+        const child = children[j]
+        // 简单过滤，减少 getComputedStyle 调用
+        if (child.hasAttribute('style') || child.classList.length > 0) {
+          checkElement(child)
+        }
+      }
+    }
+  }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const { info, data = {} } = request
   if (info === 'changeMode' || info === 'toggleMode') {
     const root = document.documentElement
-    // 💡 手动切换时添加过渡类，实现丝滑切换
+    //  手动切换时添加过渡类，实现丝滑切换
     root.classList.add('dimmerTransition')
 
     chrome.runtime.sendMessage({ action: 'getGlobal' }, (response) => {
-      const { isDark, isGlobal } = response?.state || {}
-      const [root] = document.getElementsByTagName('html')
+      const state = response?.state || {}
+      const isGlobal = state.isGlobal
+
+      //  优先使用消息中传递的状态，否则使用后台返回的状态
+      const targetIsDark = data.isDark !== undefined ? data.isDark : state.isDark
+
       if (isGlobal) {
-        if (isDark && data.exclude !== true) {
+        if (targetIsDark && data.exclude !== true) {
           root.classList.add(CLASS_KEY)
           sessionStorage.setItem(SESSION_KEY, 'true')
           htmlFilter = {
@@ -158,7 +217,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           }
         }
       } else {
-        if (!root.classList.contains(CLASS_KEY)) {
+        // 非全局模式下的切换
+        const currentlyDark = root.classList.contains(CLASS_KEY)
+        const nextDark = data.isDark !== undefined ? data.isDark : !currentlyDark
+
+        if (nextDark) {
           root.classList.add(CLASS_KEY)
           sessionStorage.setItem(SESSION_KEY, 'true')
           htmlFilter = {
@@ -175,6 +238,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       }
       root.style.filter = `${objectToFilterString(htmlFilter)}`
+
+      //  切换模式后识别背景图片
+      if (document.body) {
+        identifyBgElements([document.body])
+      }
     })
     if (info === 'toggleMode') {
       chrome.runtime.sendMessage({ action: 'updatePopupConfig' })
@@ -198,7 +266,7 @@ const checkIsFullScreen = () => {
   document.addEventListener('fullscreenchange', () => {
     const hasVideo = window.document.fullscreenElement?.querySelector('video')
     if (hasVideo) {
-      const root = document.querySelector('html')
+      const root = document.documentElement
       root?.classList.remove(CLASS_KEY)
       sessionStorage.setItem(SESSION_KEY, 'false')
     }
@@ -206,24 +274,41 @@ const checkIsFullScreen = () => {
 }
 
 /**
- * 💡 关键修复：解决知乎等站点在开启滤镜后，Modal 关闭但 body overflow: hidden 状态不恢复的问题
- * 原理：当 body 的 overflow 变为 hidden 时，监控页面上的 Modal 元素。
- * 如果 Modal 被移除但 overflow 仍然是 hidden，则手动恢复为 auto。
+ *  关键修复：解决知乎等站点在开启滤镜后，Modal 关闭但 body overflow: hidden 状态不恢复的问题
  */
 const fixScrollIssue = () => {
   const isZhihu = window.location.hostname.includes('zhihu.com')
-  if (!isZhihu) return
 
-  const checkAndRestoreScroll = () => {
-    const isDark = document.documentElement.classList.contains(CLASS_KEY)
+  const checkAndRestoreScroll = (mutations?: MutationRecord[]) => {
+    const root = document.documentElement
+    const isDark = root.classList.contains(CLASS_KEY)
     if (!isDark) return
 
+    // 处理背景图片识别
+    if (mutations) {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          identifyBgElements(mutation.addedNodes)
+        } else if (mutation.type === 'attributes' && mutation.target instanceof Element) {
+          //  性能优化：仅当 style 或 class 变化，且不是由我们自己添加的类引起时才检查
+          if (
+            mutation.attributeName === 'class' &&
+            mutation.target.classList.contains('dimmerInvert')
+          ) {
+            continue
+          }
+          // 重新加入 WeakSet 以便下次检查
+          checkedElements.delete(mutation.target)
+          identifyBgElements([mutation.target])
+        }
+      }
+    }
+
+    if (!isZhihu) return
     const body = document.body
-    const html = document.documentElement
-    if (!body || !html) return
+    if (!body || !root) return
 
     // 检查是否有任何弹窗或大图查看器
-    // 扩大检测范围，知乎的评论图片预览器可能包含这些特征
     const selectors = [
       '.Image-viewer',
       '.Modal-wrapper',
@@ -232,51 +317,43 @@ const fixScrollIssue = () => {
       '[class*="Modal"]',
       '[class*="viewer"]',
       '.css-1738258',
-      '.css-1909605', // 知乎某些版本下的弹窗类名
+      '.css-1909605',
     ]
     const hasModal = !!document.querySelector(selectors.join(', '))
 
     if (!hasModal) {
-      // 检查 body 和 html 的计算样式，因为 overflow 可能来自 class 而非 inline style
       const bodyStyle = window.getComputedStyle(body)
-      const htmlStyle = window.getComputedStyle(html)
+      const rootStyle = window.getComputedStyle(root)
 
-      if (bodyStyle.overflow === 'hidden' || htmlStyle.overflow === 'hidden') {
-        // 发现被锁死，尝试强力恢复
+      if (bodyStyle.overflow === 'hidden' || rootStyle.overflow === 'hidden') {
         const restore = () => {
-          // 再次确认 Modal 确实不在了
           if (!document.querySelector(selectors.join(', '))) {
             body.style.setProperty('overflow', 'auto', 'important')
-            html.style.setProperty('overflow', 'auto', 'important')
-            // 某些知乎版本可能还在 body 上设置了 position: fixed 或 top
+            root.style.setProperty('overflow', 'auto', 'important')
             if (bodyStyle.position === 'fixed') {
               body.style.setProperty('position', 'static', 'important')
             }
             window.dispatchEvent(new Event('resize'))
           }
         }
-
-        // 立即尝试一次，并在短时间后再确认一次（应对知乎脚本的异步操作）
         restore()
         setTimeout(restore, 500)
       }
     }
   }
 
-  // 1. 使用 MutationObserver 监控 DOM 变化
   const observer = new MutationObserver(checkAndRestoreScroll)
   observer.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ['style', 'class'],
     childList: true,
-    subtree: true, // 扩大到子树，确保能捕捉到深层的 Modal 移除
+    subtree: true,
   })
 
-  // 2. 补充：点击页面时也触发检查（关闭按钮通常在点击时生效）
   window.addEventListener(
     'click',
     () => {
-      setTimeout(checkAndRestoreScroll, 100)
+      setTimeout(() => checkAndRestoreScroll(), 100)
     },
     true,
   )
@@ -292,7 +369,7 @@ function main() {
         const isExcluded = matchWildcardUrls(window.location.href, excludeUrls)
         const shouldBeDark = isDark && !isExcluded
 
-        // 💡 同步更新 sessionStorage，供下次刷新时 applyEarlyTheme 使用
+        //  同步更新 sessionStorage，供下次刷新时 applyEarlyTheme 使用
         sessionStorage.setItem(SESSION_KEY, shouldBeDark ? 'true' : 'false')
         sessionStorage.setItem(ADVANCE_KEY, JSON.stringify(config))
 
@@ -331,10 +408,20 @@ function main() {
         }
       }
       root.style.filter = `${objectToFilterString(htmlFilter)}`
+
+      //  切换模式后识别背景图片
+      if (document.body) {
+        identifyBgElements([document.body])
+      }
     }
   })
   checkIsFullScreen()
   fixScrollIssue()
+
+  //  初始识别背景图片
+  if (document.body) {
+    identifyBgElements([document.body])
+  }
 }
 
 main()
