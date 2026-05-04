@@ -3,7 +3,7 @@ import { defineManifest } from '@crxjs/vite-plugin'
 export default defineManifest({
   name: '__MSG_extName__',
   description: '__MSG_extDescription__',
-  version: '2.2.2',
+  version: '2.2.4',
   manifest_version: 3,
   icons: { '16': 'imgs/logo16.png', '128': 'imgs/logo128.png' },
   action: {
@@ -29,6 +29,7 @@ export default defineManifest({
       js: ['src/content/index.ts'],
       matches: ['<all_urls>'],
       run_at: 'document_start',
+      all_frames: true,
     },
   ],
   web_accessible_resources: [
